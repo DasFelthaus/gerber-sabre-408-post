@@ -14,8 +14,8 @@ certificationLevel = 2;
 minimumRevision = 45917;
 
 longDescription = "Post processor for Gerber Sabre 408 router with SAB N.3 controller. " +
-  "Outputs inch-mode G-code (G20) only. Designed for 2.5-axis operation. " +
-  "Arcs restricted to XY plane. No helical interpolation. " +
+  "Outputs inch-mode G-code (G20) only. Default mode is 2.5-axis (XY and Z moves are split). " +
+  "Enable 'Allow full 3-axis movement' for simultaneous XYZ interpolation and helical arcs. " +
   "All drilling cycles expanded to G00/G01 moves.";
 
 extension = "nc";
@@ -113,6 +113,15 @@ properties = {
   splitFile: {
     title      : "Split file by tool",
     description: "Create separate NC files for each tool. Useful since SAB N.3 tool changes are manual.",
+    group      : "preferences",
+    type       : "boolean",
+    value      : false,
+    scope      : "post"
+  },
+  allow3AxisMovement: {
+    title      : "Allow full 3-axis movement",
+    description: "Allow simultaneous XYZ moves instead of splitting into separate XY and Z moves. " +
+      "Default is off (2.5-axis mode). Enable only if your controller and toolpaths support true 3-axis interpolation.",
     group      : "preferences",
     type       : "boolean",
     value      : false,
@@ -257,6 +266,11 @@ var subprograms = [];
 // --- Main Callbacks ---
 
 function onOpen() {
+  // Enable helical moves if full 3-axis mode is selected
+  if (getProperty("allow3AxisMovement")) {
+    allowHelicalMoves = true;
+  }
+
   // Machine configuration
   receivedMachineConfiguration = machineConfiguration.isReceived();
   if (typeof defineMachine == "function") {
@@ -360,21 +374,30 @@ function onSection() {
   // Spindle on
   writeBlock(mFormat.format(3), sOutput.format(spindleSpeed));
 
-  // Move to initial position (2.5D: Z first if retracting, then XY, then Z approach)
+  // Move to initial position
   var initialPosition = getFramePosition(currentSection.getInitialPosition());
 
-  // Retract to safe height first
-  writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
+  if (getProperty("allow3AxisMovement")) {
+    // Full 3-axis: retract then move to initial position in one rapid
+    writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
+    forceXYZ();
+    writeBlock(gMotionModal.format(0),
+      xOutput.format(initialPosition.x),
+      yOutput.format(initialPosition.y),
+      zOutput.format(initialPosition.z)
+    );
+  } else {
+    // 2.5D: Z first if retracting, then XY, then Z approach
+    writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
 
-  // Rapid to initial XY
-  forceXYZ();
-  writeBlock(gMotionModal.format(0),
-    xOutput.format(initialPosition.x),
-    yOutput.format(initialPosition.y)
-  );
+    forceXYZ();
+    writeBlock(gMotionModal.format(0),
+      xOutput.format(initialPosition.x),
+      yOutput.format(initialPosition.y)
+    );
 
-  // Rapid down to initial Z
-  writeBlock(gMotionModal.format(0), zOutput.format(initialPosition.z));
+    writeBlock(gMotionModal.format(0), zOutput.format(initialPosition.z));
+  }
 }
 
 function onDwell(seconds) {
@@ -390,6 +413,17 @@ function onRapid(_x, _y, _z) {
   var x = _x;
   var y = _y;
   var z = _z;
+
+  if (getProperty("allow3AxisMovement")) {
+    // Full 3-axis: output XYZ together
+    var xStr = xOutput.format(x);
+    var yStr = yOutput.format(y);
+    var zStr = zOutput.format(z);
+    if (xStr || yStr || zStr) {
+      writeBlock(gMotionModal.format(0), xStr, yStr, zStr);
+    }
+    return;
+  }
 
   // ENFORCE 2.5D: Split into separate Z and XY moves
   var current = getCurrentPosition();
@@ -428,6 +462,24 @@ function onLinear(_x, _y, _z, feed) {
   var z = _z;
   feed = clampFeed(feed);
 
+  if (getProperty("allow3AxisMovement")) {
+    // Full 3-axis: output XYZ together
+    var xStr = xOutput.format(x);
+    var yStr = yOutput.format(y);
+    var zStr = zOutput.format(z);
+    var fStr = feedOutput.format(feed);
+    if (xStr || yStr || zStr) {
+      writeBlock(gMotionModal.format(1), xStr, yStr, zStr, fStr);
+    } else if (fStr) {
+      if (getNextRecord().isMotion()) {
+        feedOutput.reset();
+      } else {
+        writeBlock(gMotionModal.format(1), fStr);
+      }
+    }
+    return;
+  }
+
   // ENFORCE 2.5D: Split simultaneous XY+Z cutting moves
   var current = getCurrentPosition();
   var zChanging = (Math.abs(z - current.z) > 0.0001);
@@ -462,8 +514,8 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
     return;
   }
 
-  // SAFETY: Reject any arc that has Z movement (helical)
-  if (isHelical()) {
+  // SAFETY: Reject any arc that has Z movement (helical) unless 3-axis mode
+  if (isHelical() && !getProperty("allow3AxisMovement")) {
     linearize(tolerance);
     return;
   }
@@ -487,10 +539,14 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
     yOutput.reset();
     iOutput.reset();
     jOutput.reset();
+    if (isHelical()) {
+      zOutput.reset();
+    }
     writeBlock(
       gMotionModal.format(clockwise ? 2 : 3),
       xOutput.format(x),
       yOutput.format(y),
+      isHelical() ? zOutput.format(z) : "",
       iOutput.format(cx - start.x),
       jOutput.format(cy - start.y),
       feedOutput.format(feed)
