@@ -86,6 +86,14 @@ properties = {
     value      : true,
     scope      : "post"
   },
+  showOperationComments: {
+    title      : "Show operation comments",
+    description: "Output the operation name as a comment at the start of each section (e.g. (2D POCKET2)). Requires Show comments.",
+    group      : "formats",
+    type       : "boolean",
+    value      : true,
+    scope      : "post"
+  },
   maxFeedrate: {
     title      : "Max feedrate (mm/min)",
     description: "Maximum feedrate in mm/min. SAB N.3 max positioning rate is 21590 mm/min (850 ipm).",
@@ -359,7 +367,7 @@ function onSection() {
   }
 
   // Operation comment
-  if (hasParameter("operation-comment")) {
+  if (getProperty("showOperationComments") && hasParameter("operation-comment")) {
     writeComment(getParameter("operation-comment"));
   }
 
