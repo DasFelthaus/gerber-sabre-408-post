@@ -134,6 +134,15 @@ properties = {
     type       : "boolean",
     value      : false,
     scope      : "post"
+  },
+  useG01ForRapids: {
+    title      : "Use G01 for rapids",
+    description: "Replace all G00 rapid moves with G01 linear moves at the configured max feedrate. " +
+      "This lets you control the maximum traverse speed from the post dialog instead of using the machine's full rapid rate.",
+    group      : "preferences",
+    type       : "boolean",
+    value      : false,
+    scope      : "post"
   }
 };
 
@@ -258,6 +267,17 @@ function clampFeed(feed) {
   return Math.min(feed, maxFeed);
 }
 
+/** Write a rapid move block. Uses G01 at max feedrate when useG01ForRapids is enabled. */
+function writeRapidBlock() {
+  var args = Array.prototype.slice.call(arguments);
+  if (getProperty("useG01ForRapids")) {
+    var rapidFeed = clampFeed(1e10);
+    writeBlock.apply(null, [gMotionModal.format(1)].concat(args).concat([feedOutput.format(rapidFeed)]));
+  } else {
+    writeBlock.apply(null, [gMotionModal.format(0)].concat(args));
+  }
+}
+
 /** Stop the spindle using the configured method. */
 function writeSpindleStop() {
   if (getProperty("useM05ForSpindleStop")) {
@@ -342,9 +362,9 @@ function onSection() {
   if (getProperty("splitFile") && insertToolCall) {
     if (!isFirstSection()) {
       // Close previous split file
-      writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
+      writeRapidBlock(zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
       writeSpindleStop();
-      writeBlock(gMotionModal.format(0), xOutput.format(0), yOutput.format(0));
+      writeRapidBlock(xOutput.format(0), yOutput.format(0));
       writeln("%");
       closeRedirection();
     }
@@ -387,24 +407,24 @@ function onSection() {
 
   if (getProperty("allow3AxisMovement")) {
     // Full 3-axis: retract then move to initial position in one rapid
-    writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
+    writeRapidBlock(zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
     forceXYZ();
-    writeBlock(gMotionModal.format(0),
+    writeRapidBlock(
       xOutput.format(initialPosition.x),
       yOutput.format(initialPosition.y),
       zOutput.format(initialPosition.z)
     );
   } else {
     // 2.5D: Z first if retracting, then XY, then Z approach
-    writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
+    writeRapidBlock(zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
 
     forceXYZ();
-    writeBlock(gMotionModal.format(0),
+    writeRapidBlock(
       xOutput.format(initialPosition.x),
       yOutput.format(initialPosition.y)
     );
 
-    writeBlock(gMotionModal.format(0), zOutput.format(initialPosition.z));
+    writeRapidBlock(zOutput.format(initialPosition.z));
   }
 }
 
@@ -428,7 +448,7 @@ function onRapid(_x, _y, _z) {
     var yStr = yOutput.format(y);
     var zStr = zOutput.format(z);
     if (xStr || yStr || zStr) {
-      writeBlock(gMotionModal.format(0), xStr, yStr, zStr);
+      writeRapidBlock(xStr, yStr, zStr);
     }
     return;
   }
@@ -441,12 +461,12 @@ function onRapid(_x, _y, _z) {
   if (zChanging && xyChanging) {
     if (z > current.z) {
       // Retract Z first, then move XY
-      writeBlock(gMotionModal.format(0), zOutput.format(z));
-      writeBlock(gMotionModal.format(0), xOutput.format(x), yOutput.format(y));
+      writeRapidBlock(zOutput.format(z));
+      writeRapidBlock(xOutput.format(x), yOutput.format(y));
     } else {
       // Move XY first, then plunge Z
-      writeBlock(gMotionModal.format(0), xOutput.format(x), yOutput.format(y));
-      writeBlock(gMotionModal.format(0), zOutput.format(z));
+      writeRapidBlock(xOutput.format(x), yOutput.format(y));
+      writeRapidBlock(zOutput.format(z));
     }
   } else {
     // Only Z or only XY is changing, output normally
@@ -454,7 +474,7 @@ function onRapid(_x, _y, _z) {
     var yStr = yOutput.format(y);
     var zStr = zOutput.format(z);
     if (xStr || yStr || zStr) {
-      writeBlock(gMotionModal.format(0), xStr, yStr, zStr);
+      writeRapidBlock(xStr, yStr, zStr);
     }
   }
 }
@@ -592,13 +612,13 @@ function onCyclePoint(x, y, z) {
   // All values are already in inches because unit = IN
 
   // STEP 1: Rapid to clearance height (Z alone, 2.5D)
-  writeBlock(gMotionModal.format(0), zOutput.format(cycle.clearance));
+  writeRapidBlock(zOutput.format(cycle.clearance));
 
   // STEP 2: Rapid to hole XY position (XY alone, 2.5D)
-  writeBlock(gMotionModal.format(0), xOutput.format(x), yOutput.format(y));
+  writeRapidBlock(xOutput.format(x), yOutput.format(y));
 
   // STEP 3: Rapid down to retract plane (Z alone)
-  writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+  writeRapidBlock(zOutput.format(cycle.retract));
 
   // STEP 4: Execute the appropriate drilling motion
   var drillingFeed = clampFeed(cycle.feedrate);
@@ -607,7 +627,7 @@ function onCyclePoint(x, y, z) {
 
   case "drilling": // G81 equivalent: simple drill to depth
     writeBlock(gMotionModal.format(1), zOutput.format(z), feedOutput.format(drillingFeed));
-    writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+    writeRapidBlock(zOutput.format(cycle.retract));
     break;
 
   case "counter-boring": // G82 equivalent: drill to depth + dwell
@@ -615,7 +635,7 @@ function onCyclePoint(x, y, z) {
     if (cycle.dwell > 0) {
       writeComment("DWELL " + secFormat.format(cycle.dwell) + "S");
     }
-    writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+    writeRapidBlock(zOutput.format(cycle.retract));
     break;
 
   case "chip-breaking": // G73 equivalent: peck with partial retract
@@ -630,9 +650,9 @@ function onCyclePoint(x, y, z) {
       writeBlock(gMotionModal.format(1), zOutput.format(currentZ), feedOutput.format(drillingFeed));
       // Partial retract for chip break (~1mm / 0.039")
       var chipBreakRetract = currentZ + toPreciseUnit(1.0, MM);
-      writeBlock(gMotionModal.format(0), zOutput.format(chipBreakRetract));
+      writeRapidBlock(zOutput.format(chipBreakRetract));
     }
-    writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+    writeRapidBlock(zOutput.format(cycle.retract));
     break;
 
   case "deep-drilling": // G83 equivalent: full-retract peck drilling
@@ -646,13 +666,13 @@ function onCyclePoint(x, y, z) {
       }
       writeBlock(gMotionModal.format(1), zOutput.format(currentZ), feedOutput.format(drillingFeed));
       // Full retract to retract plane
-      writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+      writeRapidBlock(zOutput.format(cycle.retract));
       // Rapid back down to just above previous depth if not done
       if (currentZ > (bottomZ + 0.0001)) {
-        writeBlock(gMotionModal.format(0), zOutput.format(currentZ + toPreciseUnit(0.5, MM)));
+        writeRapidBlock(zOutput.format(currentZ + toPreciseUnit(0.5, MM)));
       }
     }
-    writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+    writeRapidBlock(zOutput.format(cycle.retract));
     break;
 
   case "boring": // G85 equivalent: plunge + feed retract (not rapid)
@@ -665,14 +685,14 @@ function onCyclePoint(x, y, z) {
     // Expand unrecognized cycles as simple drill
     writeComment("WARNING: CYCLE " + cycleType + " EXPANDED AS SIMPLE DRILL");
     writeBlock(gMotionModal.format(1), zOutput.format(z), feedOutput.format(drillingFeed));
-    writeBlock(gMotionModal.format(0), zOutput.format(cycle.retract));
+    writeRapidBlock(zOutput.format(cycle.retract));
     break;
   }
 }
 
 function onCycleEnd() {
   // Retract to clearance after all holes in this cycle are done
-  writeBlock(gMotionModal.format(0), zOutput.format(cycle.clearance));
+  writeRapidBlock(zOutput.format(cycle.clearance));
 }
 
 function onSectionEnd() {
@@ -681,14 +701,14 @@ function onSectionEnd() {
 
 function onClose() {
   // Retract Z to safe height
-  writeBlock(gMotionModal.format(0), zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
+  writeRapidBlock(zOutput.format(toPreciseUnit(getProperty("safeRetractHeight"), MM)));
 
   // Spindle off
   writeSpindleStop();
 
   // Return to origin
   forceXYZ();
-  writeBlock(gMotionModal.format(0), xOutput.format(0), yOutput.format(0));
+  writeRapidBlock(xOutput.format(0), yOutput.format(0));
 
   // Program end delimiter
   writeln("%");
