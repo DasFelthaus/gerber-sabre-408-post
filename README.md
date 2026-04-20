@@ -24,9 +24,12 @@ No suitable post processor exists for this combination of machine and controller
 
 | File | Description |
 |---|---|
-| `gerber_sabre_408.cps` | Fusion post processor — install in Fusion's post library |
-| `Gerber Sabre 408.mch` | Machine configuration file |
+| `gerber_sabre_408.cps` | Post processor — install in Fusion / HSMWorks / Inventor CAM post library |
+| `Gerber Sabre 408.mch` | Machine configuration for Fusion / HSMWorks |
+| `gerber_sabre_408_inventor.machine` | Machine definition for Inventor CAM |
 | `BlueElephantCNCTools.tools` | Tool library with common router tooling |
+| `Sabre_408_table_fixture.stp` | STEP model of the sheet-locating table fixture (13 mm dowel grid) |
+| `Sabre_Users_Manual.pdf` | Original Sabre operator's manual |
 
 ## Installation
 
@@ -52,6 +55,14 @@ These are configurable in the Post Process dialog:
 | Safe retract height | 12.7 mm | Safe Z height for retracts |
 | Use M05 for spindle stop | Yes | Use M05 (if false, uses M03 S0 instead) |
 | Split file by tool | No | Create separate NC files per tool |
+
+## Table Fixture & Work Coordinates
+
+The SAB N.3 controller has no support for work coordinate systems (no G54/G55/…), so the post processor does **not** emit any WCS codes — all programmed coordinates are interpreted in **machine coordinates**, relative to machine zero.
+
+To make this practical, a table fixture (`Sabre_408_table_fixture.stp`) provides a grid of **13 mm holes sized for 13 mm round wooden dowels**. Sheet stock is pushed against the dowels, which registers the sheet origin to a known, repeatable location relative to machine zero. Once the fixture is installed and squared, sheet layout becomes a matter of dropping dowels into the right holes — no per-job touch-off is required.
+
+CAM setup should therefore place the part/sheet origin at the corresponding fixture/dowel position in machine coordinates. The Inventor CAM machine definition (`gerber_sabre_408_inventor.machine`) and the Fusion/HSMWorks `.mch` are pre-configured for this workflow.
 
 ## First-Run Verification
 
